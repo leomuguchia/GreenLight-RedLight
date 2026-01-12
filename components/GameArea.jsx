@@ -32,7 +32,7 @@ const GameArea = ({
 }) => {
   const [playerYAnim] = useState(new Animated.Value(SCREEN_HEIGHT * 0.7));
   const shakeAnim = useRef(new Animated.Value(0)).current;
-  const [pulseAnim] = useState(new Animated.Value(1)); // <-- ADD THIS LINE
+  const [pulseAnim] = useState(new Animated.Value(1)); 
   const [isPressing, setIsPressing] = useState(false);
   
   const handleTouchStart = () => {
@@ -115,10 +115,10 @@ const GameArea = ({
             signalPattern={signalPattern}
             soundSpeed={soundSpeed}
             gameData={gameData}
-            pulseAnim={pulseAnim} // <-- PASS IT HERE
+            pulseAnim={pulseAnim} 
           />
           
-          <ProgressIndicator progressStatus={progressStatus} />
+          {/* <ProgressIndicator progressStatus={progressStatus} /> */}
           
           {/* Simple debug indicator */}
           <View style={styles.debugOverlay}>

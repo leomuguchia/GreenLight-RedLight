@@ -1,4 +1,4 @@
-// engine.jsx - FIXED WITH INITIAL 4-SECOND GREEN
+// engine.jsx - WITH MOVEMENT-BASED SCORING
 
 // Constants
 const PLAYER = {
@@ -12,7 +12,7 @@ const PLAYER = {
 };
 
 const SIGNAL = {
-  INITIAL_GREEN: 4000, // 4 seconds for first green
+  INITIAL_GREEN: 4000,
   MIN_GREEN: 1500,
   MAX_GREEN: 5000,
   MIN_RED: 1000,
@@ -20,6 +20,7 @@ const SIGNAL = {
   FLASH_DURATION: 250,
   GREEN_SOUND_DURATION: 1000,
   RED_SOUND_DURATION: 1000,
+  WARNING_BEFORE_END: 500,
 };
 
 const GATE = {
@@ -68,14 +69,7 @@ class SoundTimingCalculator {
 // Progress Pressure System
 class ProgressPressureSystem {
   constructor() {
-    this.gameStartTime = Date.now();
-    this.lastProgressCheck = Date.now();
-    this.lastGatePassedTime = Date.now();
-    this.gatesPassedSinceLastCheck = 0;
-    this.currentProgressScore = 1.0;
-    this.progressWarningActive = false;
-    this.progressDangerActive = false;
-    this.stagnationWarningActive = false;
+    this.reset();
   }
   
   reset() {
@@ -133,20 +127,11 @@ class ProgressPressureSystem {
   }
   
   getProgressStatus() {
-    const now = Date.now();
-    const timeSinceLastGate = now - this.lastGatePassedTime;
-    const timeUntilStagnation = Math.max(0, PROGRESS.MAX_STAGNATION_TIME - timeSinceLastGate);
-    const nextCheckIn = Math.max(0, PROGRESS.CHECK_INTERVAL - (now - this.lastProgressCheck));
-    
     return {
       progressScore: this.currentProgressScore,
       isBehindSchedule: this.progressWarningActive,
       isDangerouslyBehind: this.progressDangerActive,
       isStagnating: this.stagnationWarningActive,
-      timeSinceLastGate,
-      timeUntilStagnation,
-      nextCheckIn,
-      requiredGatesPerMinute: PROGRESS.MIN_GATES_PER_MINUTE,
     };
   }
   
@@ -158,13 +143,7 @@ class ProgressPressureSystem {
 // LIC Algorithm
 class LICAlgorithm {
   constructor() {
-    this.playerPatterns = {
-      reactionTime: [],
-      stopDistance: [],
-      speedPatterns: [],
-      gatePerformance: [],
-    };
-    this.adaptiveLevel = 1;
+    this.reset();
   }
 
   reset() {
@@ -191,7 +170,7 @@ class LICAlgorithm {
   }
 }
 
-// Main Game Engine - WITH FIXED INITIAL TIMING
+// Main Game Engine
 export class RedLightGreenLightEngine {
   constructor() {
     this.lic = new LICAlgorithm();
@@ -217,6 +196,7 @@ export class RedLightGreenLightEngine {
     this.gatesPassed = 0;
     this.maxGatesReached = 0;
     this.totalDistance = 0;
+    this.distanceMovedThisFrame = 0;
     this.gameStartTime = Date.now();
     this.totalPlayTime = 0;
     
@@ -227,16 +207,12 @@ export class RedLightGreenLightEngine {
     
     // Signal system
     this.signalStartTime = Date.now();
-    this.currentSignalDuration = SIGNAL.INITIAL_GREEN; // Use INITIAL_GREEN
+    this.currentSignalDuration = SIGNAL.INITIAL_GREEN;
     this.signalPattern = 'normal';
-    this.nextSignalTime = Date.now() + SIGNAL.INITIAL_GREEN; // 4 seconds for first green
+    this.nextSignalTime = Date.now() + SIGNAL.INITIAL_GREEN;
     
     // Sound timing
-    this.soundTiming = {
-      soundSpeed: 1.0,
-      shouldPlaySound: true,
-      soundDelay: 0,
-    };
+    this.soundTiming = SoundTimingCalculator.getSoundTiming('green', SIGNAL.INITIAL_GREEN);
     
     // Difficulty metrics
     this.internalDifficulty = 1;
@@ -256,6 +232,9 @@ export class RedLightGreenLightEngine {
     const now = Date.now();
     this.totalPlayTime = now - this.gameStartTime;
     
+    // Reset distance tracker for this frame
+    this.distanceMovedThisFrame = 0;
+    
     // Update progress pressure
     this.updateProgressPressure();
     
@@ -274,7 +253,7 @@ export class RedLightGreenLightEngine {
     // Update gates
     this.updateGates();
     
-    // Update score
+    // Update score - movement based
     this.updateScore();
   }
   
@@ -299,11 +278,7 @@ export class RedLightGreenLightEngine {
     this.signal = wasGreen ? 'red' : 'green';
     this.signalStartTime = now;
     
-    // CRITICAL FIX: Don't check immediately on signal switch
-    // The 200ms grace period is already in a setTimeout
-    // We'll let the setTimeout handle the check
-    
-    // Calculate duration (use normal durations after initial green)
+    // Calculate duration
     const licAdjustments = this.lic.calculateDifficultyAdjustments();
     
     if (this.signal === 'green') {
@@ -324,19 +299,13 @@ export class RedLightGreenLightEngine {
     // Calculate sound timing
     this.calculateSoundTiming();
     
-    // Check for elimination after 200ms grace period (only for green->red switches)
+    // Check for elimination after grace period (green->red only)
     if (wasGreen && this.signal === 'red') {
       setTimeout(() => {
         if (this.state !== 'running') return;
         
-        if (this.isTouching) {
+        if (this.isTouching || this.slideMomentum > PLAYER.SLIDE_THRESHOLD) {
           this.state = 'gameOver';
-          return;
-        }
-        
-        if (this.slideMomentum > PLAYER.SLIDE_THRESHOLD) {
-          this.state = 'gameOver';
-          return;
         }
       }, 200);
     }
@@ -348,11 +317,10 @@ export class RedLightGreenLightEngine {
   }
   
   calculateSoundTiming() {
-    const timing = SoundTimingCalculator.getSoundTiming(
+    this.soundTiming = SoundTimingCalculator.getSoundTiming(
       this.signal, 
       this.currentSignalDuration
     );
-    this.soundTiming = timing;
   }
 
   triggerRedFlash() {
@@ -403,6 +371,7 @@ export class RedLightGreenLightEngine {
       const distance = this.speed * deltaTime;
       this.position += distance;
       this.totalDistance += distance;
+      this.distanceMovedThisFrame = distance;
       
     } else if (this.signal === 'green' && !this.isTouching) {
       this.isMoving = false;
@@ -417,7 +386,9 @@ export class RedLightGreenLightEngine {
     // Handle slide momentum
     if (this.isSliding) {
       this.slideMomentum *= PLAYER.SLIDE_DECAY;
-      this.position += this.slideMomentum * deltaTime;
+      const slideDistance = this.slideMomentum * deltaTime;
+      this.position += slideDistance;
+      this.distanceMovedThisFrame = slideDistance;
       
       if (this.slideMomentum < PLAYER.MIN_SPEED) {
         this.isSliding = false;
@@ -488,6 +459,9 @@ export class RedLightGreenLightEngine {
   }
 
   passGate(gate) {
+    // Only award gate points if moving
+    if (!this.isMoving && !this.isSliding) return;
+    
     this.gatesPassed++;
     this.gateStreak++;
     
@@ -521,12 +495,21 @@ export class RedLightGreenLightEngine {
   }
 
   updateScore() {
-    const distanceScore = Math.floor(this.totalDistance / 10);
-    this.score = Math.max(this.score, distanceScore);
+    // Only award distance points for actual movement
+    if (this.distanceMovedThisFrame > 0) {
+      const movementBonus = Math.floor(this.distanceMovedThisFrame / 2);
+      this.score += movementBonus;
+    }
     
-    if (this.progressStatus && this.progressStatus.progressScore > 1.0) {
-      const progressBonus = Math.floor((this.progressStatus.progressScore - 1.0) * 10);
+    // Progress bonus only if actively moving
+    if (this.progressStatus && this.progressStatus.progressScore > 1.0 && this.isMoving) {
+      const progressBonus = Math.floor((this.progressStatus.progressScore - 1.0) * 5);
       this.score += progressBonus;
+    }
+    
+    // Minimum score protection
+    if (this.score < 0) {
+      this.score = 0;
     }
   }
 
@@ -558,22 +541,28 @@ export class RedLightGreenLightEngine {
     this.state = 'running';
     this.gameStartTime = Date.now();
     this.signalStartTime = Date.now();
-    this.nextSignalTime = Date.now() + SIGNAL.INITIAL_GREEN; // 4 seconds
+    this.nextSignalTime = Date.now() + SIGNAL.INITIAL_GREEN;
     this.calculateSoundTiming();
   }
 
   getGameState() {
     const now = Date.now();
+    const timeUntilNextSignal = Math.max(0, this.nextSignalTime - now);
     
     const signalChanged = this.signal !== this.lastSignal;
     if (signalChanged) {
       this.lastSignal = this.signal;
     }
     
+    const shouldPlayWarning = this.signal === 'green' && 
+                             timeUntilNextSignal <= SIGNAL.WARNING_BEFORE_END && 
+                             timeUntilNextSignal > 0;
+    
     return {
       state: this.state,
       signal: this.signal,
       signalChanged: signalChanged,
+      shouldPlayWarning: shouldPlayWarning,
       signalPattern: this.signalPattern,
       isMoving: this.isMoving,
       isTouching: this.isTouching,
@@ -587,8 +576,10 @@ export class RedLightGreenLightEngine {
       internalDifficulty: this.internalDifficulty,
       gateStreak: this.gateStreak,
       gates: [...this.gates],
-      timeUntilNextSignal: Math.max(0, this.nextSignalTime - now),
+      timeUntilNextSignal: timeUntilNextSignal,
       currentSignalDuration: this.currentSignalDuration,
+      greenTime: this.signal === 'green' ? this.currentSignalDuration : 0,
+      redTime: this.signal === 'red' ? this.currentSignalDuration : 0,
       
       soundTiming: { ...this.soundTiming },
       shouldPlaySound: this.soundTiming.shouldPlaySound,
